@@ -1,55 +1,49 @@
-`timescale 1ns / 1ps
-//////////////////////////////////////////////////////////////////////////////////
+`timescale 1ns/1ps
 
 module uart_loopback_tb;
 
-reg clk;
-reg reset;
-reg start;
-reg [7:0] data_in;
+    reg clk, reset, start;
+    reg  [7:0] data_in;
+    wire tx, rx, busy, data_valid;
+    wire [7:0] data_out;
 
-wire tx;
-wire rx;
-wire [7:0] data_out;
-wire data_valid;
-wire busy;
+    assign rx = tx;   // loopback
 
-// Loopback
-assign rx = tx;
+    uart_tx TX (.clk(clk), .reset(reset), .start(start), .data_in(data_in), .tx(tx), .busy(busy));
+    uart_rx RX (.clk(clk), .reset(reset), .rx(rx), .data_out(data_out), .data_valid(data_valid));
 
-// Instantiate TX
-uart_tx #(.CLKS_PER_BIT(100)) tx_unit (
-    .clk(clk), .reset(reset), .start(start),
-    .data_in(data_in), .tx(tx), .busy(busy)
-);
+    always #5 clk = ~clk;
 
-// Instantiate RX
-uart_rx #(.CLKS_PER_BIT(100)) rx_unit (
-    .clk(clk), .reset(reset), .rx(rx),
-    .data_out(data_out), .data_valid(data_valid)
-);
+    task send_and_check(input [7:0] byte_val);
+        begin
+            @(posedge clk);
+            data_in = byte_val;
+            start   = 1;
+            @(posedge clk);
+            start   = 0;
+            wait (data_valid == 1);
 
-// 100MHz clock (10ns period)
-always #5 clk = ~clk;
+            // SystemVerilog immediate assertion
+            assert (data_out === byte_val)
+                $display("PASS: sent 0x%0h, received 0x%0h", byte_val, data_out);
+            else
+                $error("FAIL: sent 0x%0h, but received 0x%0h", byte_val, data_out);
 
-initial begin
-    clk     = 0;
-    reset   = 1;
-    start   = 0;
-    data_in = 8'hA5;
+            @(posedge clk);
+        end
+    endtask
 
-    #200  reset = 0;   // ✅ release reset after 200ns (was too long before)
-    #300  start = 1;   // ✅ wait for IDLE state to settle
-    #10   start = 0;   // ✅ one-shot pulse (just 1 clock wide)
+    initial begin
+        clk = 0; reset = 1; start = 0; data_in = 0;
+        #20 reset = 0;
 
-    #50000;            // ✅ wait 20µs - enough for full frame + margin
-    $finish;
-end
+        send_and_check(8'hA5);
+        send_and_check(8'h00);
+        send_and_check(8'hFF);
+        send_and_check(8'h3C);
 
-// Monitor to confirm in console
-initial begin
-    $monitor("Time=%0t | tx=%b | data_out=%h | data_valid=%b | busy=%b",
-              $time, tx, data_out, data_valid, busy);
-end
+        $display("All test cases completed.");
+        $finish;
+    end
 
 endmodule
